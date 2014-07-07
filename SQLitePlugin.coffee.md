@@ -13,7 +13,6 @@ License for common Javascript: MIT or Apache
 - global constants:
 
     READ_ONLY_REGEX = /^\s*(?:drop|delete|insert|update|create)\s/i
-    IOS_REGEX = /iP(?:ad|hone|od)/
 
     nextTick = window.setImmediate || (fun) ->
       window.setTimeout(fun, 0)
@@ -47,11 +46,10 @@ License for common Javascript: MIT or Apache
 
       #@bg = !!openargs.bgType and openargs.bgType == 1
       @bg =
-        if !openargs.bgType
-          # default to true for iOS only (due to memory issue)
-          IOS_REGEX.test(navigator.userAgent)
+        if typeof openargs.bgType != 'undefined'
+          openargs.bgType
         else
-          openargs.bgType == 1
+          true
 
       @open @openSuccess, @openError
       return
