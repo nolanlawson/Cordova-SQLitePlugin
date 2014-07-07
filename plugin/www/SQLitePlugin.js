@@ -2,7 +2,7 @@
 
   'use strict';
 
-  var DEBUG = false;
+  var DEBUG = true;
   var READ_ONLY_REGEX = /^\s*(?:drop|delete|insert|update|create)\s/i;
 
   function log(msg) {
@@ -121,25 +121,6 @@
   };
 
   /*
-  FUTURE TBD GONE: Required for db.executePragmStatement() callback ONLY:
-  */
-
-  // -----------------------------------
-  // SQLitePluginCallback
-  // -----------------------------------
-
-  var SQLitePluginCallback = {
-    p1: function (id, result) {
-      var mycb;
-      log("PRAGMA CB");
-      mycb = function () {
-        return 1;
-      };
-      mycb(result);
-    }
-  };
-
-  /*
   Transaction batching object:
   */
 
@@ -195,6 +176,8 @@
   };
 
   SQLitePluginTransaction.prototype.executeSql = function (sql, values, success, error) {
+
+    log('called: ' + sql);
 
     if (this.readOnly && READ_ONLY_REGEX.test(sql)) {
       this.handleStatementFailure(error, {message: 'invalid sql for a read-only transaction'});
@@ -312,6 +295,10 @@
         }
       }
     };
+    log('executing: ');
+    for (var ii = 0; ii < tropts.length; ii++) {
+      log('  ' + tropts[ii].sql);
+    }
     mycommand = this.db.bg ? "backgroundExecuteSqlBatch" : "executeSqlBatch";
     cordova.exec(mycb, null, "SQLitePlugin", mycommand, [
       {
@@ -378,73 +365,69 @@
   };
 
   // -----------------------------------
-  // SQLiteFactory
-  // -----------------------------------
-
-  var SQLiteFactory = {
-    /*
-    NOTE: this function should NOT be translated from Javascript
-    back to CoffeeScript by js2coffee.
-    If this function is edited in Javascript then someone will
-    have to translate it back to CoffeeScript by hand.
-    */
-
-    opendb: function () {
-      var errorcb, first, okcb, openargs;
-      if (arguments.length < 1) {
-        return null;
-      }
-      first = arguments[0];
-      openargs = null;
-      okcb = null;
-      errorcb = null;
-      if (first.constructor === String) {
-        openargs = {
-          name: first
-        };
-        if (arguments.length >= 5) {
-          okcb = arguments[4];
-          if (arguments.length > 5) {
-            errorcb = arguments[5];
-          }
-        }
-      } else {
-        openargs = first;
-        if (arguments.length >= 2) {
-          okcb = arguments[1];
-          if (arguments.length > 2) {
-            errorcb = arguments[2];
-          }
-        }
-      }
-      return new SQLitePlugin(openargs, okcb, errorcb);
-    },
-    deleteDb: function (databaseName, success, error) {
-      return cordova.exec(success, error, "SQLitePlugin", "delete", [
-        {
-          path: databaseName
-        }
-      ]);
-    }
-  };
-
-  // -----------------------------------
-  // Globals 'n' stuff
+  // Globals
   // -----------------------------------
 
   /*
-  FUTURE TBD GONE: Required for db.executePragmStatement() callback ONLY:
-  */
+   FUTURE TBD GONE: Required for db.executePragmStatement() callback ONLY:
+   */
+  window.SQLitePluginCallback = {
+    p1: function (id, result) {
+      var mycb;
+      log("PRAGMA CB");
+      mycb = function () {
+        return 1;
+      };
+      mycb(result);
+    }
+  };
+
+  function openDatabase() {
+    var errorcb, first, okcb, openargs;
+    if (arguments.length < 1) {
+      return null;
+    }
+    first = arguments[0];
+    openargs = null;
+    okcb = null;
+    errorcb = null;
+    if (first.constructor === String) {
+      openargs = {
+        name: first
+      };
+      if (arguments.length >= 5) {
+        okcb = arguments[4];
+        if (arguments.length > 5) {
+          errorcb = arguments[5];
+        }
+      }
+    } else {
+      openargs = first;
+      if (arguments.length >= 2) {
+        okcb = arguments[1];
+        if (arguments.length > 2) {
+          errorcb = arguments[2];
+        }
+      }
+    }
+    return new SQLitePlugin(openargs, okcb, errorcb);
+  }
 
 
-  window.SQLitePluginCallback = SQLitePluginCallback;
+  function deleteDatabase(databaseName, success, error) {
+    return cordova.exec(success, error, "SQLitePlugin", "delete", [
+      {
+        path: databaseName
+      }
+    ]);
+  }
 
   window.sqlitePlugin = {
     sqliteFeatures: {
       isSQLitePlugin: true
     },
-    openDatabase: SQLiteFactory.opendb,
-    deleteDatabase: SQLiteFactory.deleteDb
+    openDatabase: openDatabase,
+    deleteDatabase: deleteDatabase
   };
 
-}).call(this);
+})();
