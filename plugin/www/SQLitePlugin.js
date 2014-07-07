@@ -11,6 +11,8 @@
     }
   }
 
+  var noop = function () {};
+
   // -----------------------------------
   // SQLitePlugin
   // -----------------------------------
@@ -39,11 +41,11 @@
 
   SQLitePlugin.prototype.openDBs = {};
 
-  SQLitePlugin.prototype.txQ = [];
+  SQLitePlugin.prototype.txQueue = [];
 
   SQLitePlugin.prototype.addTransaction = function (t) {
-    this.txQ.push(t);
-    if (this.txQ.length === 1) {
+    this.txQueue.push(t);
+    if (this.txQueue.length === 1) {
       t.start();
     }
   };
@@ -57,9 +59,9 @@
   };
 
   SQLitePlugin.prototype.startNextTransaction = function () {
-    this.txQ.shift();
-    if (this.txQ[0]) {
-      this.txQ[0].start();
+    this.txQueue.shift();
+    if (this.txQueue[0]) {
+      this.txQueue[0].start();
     }
   };
 
@@ -140,9 +142,9 @@
       throw new Error("transaction expected a function");
     }
     this.db = db;
-    this.fn = fn;
-    this.error = error;
-    this.success = success;
+    this.fn = fn || noop;
+    this.error = error || noop;
+    this.success = success || noop;
     this.txlock = txlock;
     this.readOnly = readOnly;
     this.executes = [];
@@ -154,25 +156,15 @@
   }
 
   SQLitePluginTransaction.prototype.start = function () {
-    var err;
     try {
-      if (!this.fn) {
-        return;
-      }
       this.fn(this);
-      this.fn = null;
-      this.run();
-    } catch (_error) {
-      err = _error;
-      /*
-      If "fn" throws, we must report the whole transaction as failed.
-      */
-
+    } catch (err) {
+      // If "fn" throws, we must report the whole transaction as failed.
       this.db.startNextTransaction();
-      if (this.error) {
-        this.error(err);
-      }
+      this.error(err);
+      return;
     }
+    this.run();
   };
 
   SQLitePluginTransaction.prototype.executeSql = function (sql, values, success, error) {
@@ -224,15 +216,13 @@
   };
 
   SQLitePluginTransaction.prototype.run = function () {
-    var batchExecutes, handlerFor, i, mycb, mycbmap, mycommand, qid, request, tropts,
-      tx, txFailure, waiting;
-    txFailure = null;
-    tropts = [];
-    batchExecutes = this.executes;
-    waiting = batchExecutes.length;
+    var txFailure = null;
+    var tropts = [];
+    var batchExecutes = this.executes;
+    var waiting = batchExecutes.length;
     this.executes = [];
-    tx = this;
-    handlerFor = function (index, didSucceed) {
+    var tx = this;
+    var handlerFor = function (index, didSucceed) {
       return function (response) {
         var err;
         try {
@@ -251,10 +241,8 @@
           if (txFailure) {
             tx.abort(txFailure);
           } else if (tx.executes.length > 0) {
-            /*
-            new requests have been issued by the callback
-            handlers, so run another batch.
-            */
+            // new requests have been issued by the callback
+            // handlers, so run another batch.
 
             tx.run();
           } else {
@@ -263,11 +251,10 @@
         }
       };
     };
-    i = 0;
-    mycbmap = {};
-    while (i < batchExecutes.length) {
-      request = batchExecutes[i];
-      qid = request.qid;
+    var mycbmap = {};
+    for (var i = 0; i < batchExecutes.length; i++) {
+      var request = batchExecutes[i];
+      var qid = request.qid;
       mycbmap[qid] = {
         success: handlerFor(i, true),
         error: handlerFor(i, false)
@@ -278,12 +265,11 @@
         sql: request.sql,
         params: request.params
       });
-      i++;
     }
-    mycb = function (result) {
-      var q, r, res, type, _i, _len;
-      for (_i = 0, _len = result.length; _i < _len; _i++) {
-        r = result[_i];
+    var mycb = function (result) {
+      var q, r, res, type, i, len;
+      for (i = 0, len = result.length; i < len; i++) {
+        r = result[i];
         type = r.type;
         qid = r.qid;
         res = r.result;
@@ -295,11 +281,13 @@
         }
       }
     };
-    log('executing: ');
-    for (var ii = 0; ii < tropts.length; ii++) {
-      log('  ' + tropts[ii].sql);
+    if (DEBUG) {
+      log('executing: ');
+      for (i = 0; i < tropts.length; i++) {
+        log('  ' + tropts[i].sql);
+      }
     }
-    mycommand = this.db.bg ? "backgroundExecuteSqlBatch" : "executeSqlBatch";
+    var mycommand = this.db.bg ? "backgroundExecuteSqlBatch" : "executeSqlBatch";
     cordova.exec(mycb, null, "SQLitePlugin", mycommand, [
       {
         dbargs: {
