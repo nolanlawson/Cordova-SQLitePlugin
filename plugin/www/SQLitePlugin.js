@@ -1,5 +1,4 @@
 (function () {
-
   'use strict';
 
   var DEBUG = true;
@@ -11,6 +10,7 @@
     }
   }
 
+  var nextTick = window.setImmediate || function (fun) { window.setTimeout(fun, 0); };
   var noop = function () {};
 
   // -----------------------------------
@@ -45,9 +45,7 @@
 
   SQLitePlugin.prototype.addTransaction = function (t) {
     this.txQueue.push(t);
-    if (this.txQueue.length === 1) {
-      t.start();
-    }
+    this.startNextTransaction(false);
   };
 
   SQLitePlugin.prototype.transaction = function (fn, error, success) {
@@ -58,11 +56,16 @@
     this.addTransaction(new SQLitePluginTransaction(this, fn, error, success, true, true));
   };
 
-  SQLitePlugin.prototype.startNextTransaction = function () {
-    this.txQueue.shift();
-    if (this.txQueue[0]) {
-      this.txQueue[0].start();
+  SQLitePlugin.prototype.startNextTransaction = function (completedLast) {
+    var self = this;
+    if (!completedLast) {
+      self.ready = true;
     }
+    nextTick(function () {
+      if (self.ready && self.txQueue.length > 0) {
+        self.txQueue.shift().start();
+      }
+    });
   };
 
   SQLitePlugin.prototype.open = function (success, error) {
@@ -188,12 +191,11 @@
   };
 
   SQLitePluginTransaction.prototype.handleStatementSuccess = function (handler, response) {
-    var payload, rows;
     if (!handler) {
       return;
     }
-    rows = response.rows || [];
-    payload = {
+    var rows = response.rows || [];
+    var payload = {
       rows: {
         item: function (i) {
           return rows[i];
@@ -369,6 +371,7 @@
   };
 
   function openDatabase() {
+    // TODO: this leaks the arguments
     var errorcb, first, okcb, openargs;
     if (arguments.length < 1) {
       return null;
