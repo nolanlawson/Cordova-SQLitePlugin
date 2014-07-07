@@ -45,7 +45,7 @@
 
   SQLitePlugin.prototype.addTransaction = function (t) {
     this.txQueue.push(t);
-    this.startNextTransaction(false);
+    this.startNextTransaction();
   };
 
   SQLitePlugin.prototype.transaction = function (fn, error, success) {
@@ -56,13 +56,10 @@
     this.addTransaction(new SQLitePluginTransaction(this, fn, error, success, true, true));
   };
 
-  SQLitePlugin.prototype.startNextTransaction = function (completedLast) {
+  SQLitePlugin.prototype.startNextTransaction = function () {
     var self = this;
-    if (!completedLast) {
-      self.ready = true;
-    }
     nextTick(function () {
-      if (self.ready && self.txQueue.length > 0) {
+      if (self.txQueue.length > 0) {
         self.txQueue.shift().start();
       }
     });
