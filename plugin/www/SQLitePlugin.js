@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var DEBUG = true;
+  var DEBUG = false;
   var READ_ONLY_REGEX = /^\s*(?:drop|delete|insert|update|create)\s/i;
 
   function log(msg) {
