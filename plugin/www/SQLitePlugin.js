@@ -84,18 +84,18 @@
   };
 
   SQLitePlugin.prototype.executeSql = function (statement, params, success, error) {
-    var myerror, myfn, mysuccess;
-    mysuccess = function (t, r) {
-      if (!!success) {
-        return success(r);
+
+    var mysuccess = function (txn, result) {
+      if (success) {
+        return success(result);
       }
     };
-    myerror = function (t, e) {
-      if (!!error) {
-        return error(e);
+    var myerror = function (txn, err) {
+      if (error) {
+        return error(err);
       }
     };
-    myfn = function (tx) {
+    var myfn = function (tx) {
       tx.executeSql(statement, params, mysuccess, myerror);
     };
     this.addTransaction(new SQLitePluginTransaction(this, myfn, myerror, mysuccess, false));
@@ -299,18 +299,17 @@
   };
 
   SQLitePluginTransaction.prototype.abort = function (txFailure) {
-    var failed, succeeded, tx;
     if (this.finalized) {
       return;
     }
-    tx = this;
-    succeeded = function (tx) {
+    var tx = this;
+    var succeeded = function (tx) {
       tx.db.startNextTransaction();
       if (tx.error) {
         tx.error(txFailure);
       }
     };
-    failed = function (tx, err) {
+    var failed = function (tx, err) {
       tx.db.startNextTransaction();
       if (tx.error) {
         tx.error(new Error("error while trying to roll back: " + err.message));
@@ -326,18 +325,17 @@
   };
 
   SQLitePluginTransaction.prototype.finish = function () {
-    var failed, succeeded, tx;
     if (this.finalized) {
       return;
     }
-    tx = this;
-    succeeded = function (tx) {
+    var tx = this;
+    var succeeded = function (tx) {
       tx.db.startNextTransaction();
       if (tx.success) {
         tx.success();
       }
     };
-    failed = function (tx, err) {
+    var failed = function (tx, err) {
       tx.db.startNextTransaction();
       if (tx.error) {
         tx.error(new Error("error while trying to commit: " + err.message));
