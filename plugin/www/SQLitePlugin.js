@@ -60,6 +60,7 @@
     var self = this;
     nextTick(function () {
       if (self.txQueue.length > 0) {
+        self.ready = false;
         self.txQueue.shift().start();
       }
     });
