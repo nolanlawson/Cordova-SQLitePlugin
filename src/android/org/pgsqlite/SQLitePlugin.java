@@ -18,6 +18,8 @@ import java.io.File;
 import java.lang.IllegalArgumentException;
 import java.lang.Number;
 import java.util.HashMap;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 
 import org.apache.cordova.CallbackContext;
 import org.apache.cordova.CordovaPlugin;
@@ -30,16 +32,9 @@ public class SQLitePlugin extends CordovaPlugin {
     /**
      * Multiple database map (static).
      */
-    static HashMap<String, SQLiteDatabase> dbmap = new HashMap<String, SQLiteDatabase>();
+    private final HashMap<String, SQLiteDatabase> dbmap = new HashMap<String, SQLiteDatabase>();
 
-    /**
-     * Get a SQLiteDatabase reference from the db map (public static accessor).
-     *
-     * @param dbname The name of the database.
-     */
-    public static SQLiteDatabase getSQLiteDatabase(String dbname) {
-        return dbmap.get(dbname);
-    }
+    private final Executor backgroundThreadPool = Executors.newFixedThreadPool(1);
 
     /**
      * NOTE: Using default constructor, explicit constructor no longer required.
@@ -48,7 +43,7 @@ public class SQLitePlugin extends CordovaPlugin {
     /**
      * Executes the request and returns PluginResult.
      *
-     * @param action The action to execute.
+     * @param actionAsString The action to execute.
      * @param args   JSONArry of arguments for the plugin.
      * @param cbc    Callback context from Cordova API
      * @return       Whether the action was valid.
@@ -125,9 +120,19 @@ public class SQLitePlugin extends CordovaPlugin {
                     }
                 }
 
-                Cursor myCursor = this.getDatabase(dbname).rawQuery(query, params);
+                Cursor cursor = null;
+                String result;
+                try {
+                    synchronized (SQLitePlugin.class) {
+                        cursor = this.getDatabase(dbname).rawQuery(query, params);
+                    }
 
-                String result = this.getRowsResultFromQuery(myCursor).getJSONArray("rows").toString();
+                    result = this.getRowsResultFromQuery(cursor).getJSONArray("rows").toString();
+                } finally {
+                    if (cursor != null) {
+                        cursor.close();
+                    }
+                }
 
                 this.sendJavascriptCB("window.SQLitePluginCallback.p1('" + id + "', " + result + ");");
                 break;
@@ -167,7 +172,9 @@ public class SQLitePlugin extends CordovaPlugin {
                 if (action == Action.backgroundExecuteSqlBatch) {
                     this.executeSqlBatchInBackground(dbname, queries, jsonparams, queryIDs, cbc);
                 } else {
-                    this.executeSqlBatch(dbname, queries, jsonparams, queryIDs, cbc);
+                    synchronized (SQLitePlugin.class) {
+                        this.executeSqlBatch(dbname, queries, jsonparams, queryIDs, cbc);
+                    }
                 }
                 break;
         }
@@ -180,6 +187,7 @@ public class SQLitePlugin extends CordovaPlugin {
      */
     @Override
     public void onDestroy() {
+        Log.i(SQLitePlugin.class.getSimpleName(), "onDestroy");
         while (!dbmap.isEmpty()) {
             String dbname = dbmap.keySet().iterator().next();
             this.closeDatabase(dbname);
@@ -210,7 +218,12 @@ public class SQLitePlugin extends CordovaPlugin {
 
         Log.v("info", "Open sqlite db: " + dbfile.getAbsolutePath());
 
-        SQLiteDatabase mydb = SQLiteDatabase.openOrCreateDatabase(dbfile, null);
+        SQLiteDatabase mydb;
+        synchronized (SQLitePlugin.class) {
+            Log.d(SQLitePlugin.class.getSimpleName(), "openOrCreateDatabase(): " + dbname);
+            mydb = SQLiteDatabase.openOrCreateDatabase(dbfile, null);
+            Log.d(SQLitePlugin.class.getSimpleName(), "opened!");
+        }
 
         dbmap.put(dbname, mydb);
     }
@@ -224,7 +237,11 @@ public class SQLitePlugin extends CordovaPlugin {
         SQLiteDatabase mydb = this.getDatabase(dbName);
 
         if (mydb != null) {
-            mydb.close();
+            synchronized (SQLitePlugin.class) {
+                Log.d(SQLitePlugin.class.getSimpleName(), "db.close(): " + dbName);
+                mydb.close();
+                Log.d(SQLitePlugin.class.getSimpleName(), "closed!");
+            }
             dbmap.remove(dbName);
         }
     }
@@ -248,7 +265,9 @@ public class SQLitePlugin extends CordovaPlugin {
 
         // Use try & catch just in case android.os.Build.VERSION.SDK_INT >= 16 was lying:
         try {
-            status = SQLiteDatabase.deleteDatabase(dbfile);
+            synchronized (SQLitePlugin.class) {
+                status = SQLiteDatabase.deleteDatabase(dbfile);
+            }
         } catch (Exception ex) {
             // log & give up:
             Log.v("executeSqlBatch", "deleteDatabase(): Error=" + ex.getMessage());
@@ -279,12 +298,10 @@ public class SQLitePlugin extends CordovaPlugin {
     private void executeSqlBatchInBackground(final String dbName,
                                              final String[] queryarr, final JSONArray[] jsonparams,
                                              final String[] queryIDs, final CallbackContext cbc) {
-        final SQLitePlugin myself = this;
-
-        this.cordova.getThreadPool().execute(new Runnable() {
+        backgroundThreadPool.execute(new Runnable() {
             public void run() {
-                synchronized (myself) {
-                    myself.executeSqlBatch(dbName, queryarr, jsonparams, queryIDs, cbc);
+                synchronized (SQLitePlugin.class) {
+                    executeSqlBatch(dbName, queryarr, jsonparams, queryIDs, cbc);
                 }
             }
         });
@@ -463,13 +480,18 @@ public class SQLitePlugin extends CordovaPlugin {
                         }
                     }
 
-                    Cursor myCursor = mydb.rawQuery(query, params);
+                    Cursor cursor = null;
 
-                    if (query_id.length() > 0) {
-                        queryResult = this.getRowsResultFromQuery(myCursor);
+                    try {
+                        cursor = mydb.rawQuery(query, params);
+                        if (query_id.length() > 0) {
+                            queryResult = this.getRowsResultFromQuery(cursor);
+                        }
+                    } finally {
+                        if (cursor != null) {
+                            cursor.close();
+                        }
                     }
-
-                    myCursor.close();
                 }
             } catch (Exception ex) {
                 ex.printStackTrace();
@@ -618,5 +640,4 @@ public class SQLitePlugin extends CordovaPlugin {
         executeBatchTransaction,
         backgroundExecuteSqlBatch,
     }
-
 }
