@@ -12,6 +12,8 @@ import android.database.sqlite.SQLiteException;
 import android.database.sqlite.SQLiteStatement;
 
 import android.os.AsyncTask;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Base64;
 import android.util.Log;
 
@@ -32,6 +34,8 @@ public class SQLitePlugin extends CordovaPlugin {
      * Multiple database map (static).
      */
     static HashMap<String, SQLiteDatabase> dbmap = new HashMap<String, SQLiteDatabase>();
+
+    static HashMap<String, LooperThread> threadmap = new HashMap<String, LooperThread>();
 
     /**
      * Get a SQLiteDatabase reference from the db map (public static accessor).
@@ -192,6 +196,7 @@ public class SQLitePlugin extends CordovaPlugin {
                 String dbname = dbmap.keySet().iterator().next();
                 this.closeDatabase(dbname);
                 dbmap.remove(dbname);
+                threadmap.remove(dbname);
             }
         }
     }
@@ -226,6 +231,9 @@ public class SQLitePlugin extends CordovaPlugin {
             SQLiteDatabase mydb = SQLiteDatabase.openOrCreateDatabase(dbfile, null);
 
             dbmap.put(dbname, mydb);
+            LooperThread thread = new LooperThread();
+            thread.start();
+            threadmap.put(dbname, thread);
         }
     }
 
@@ -243,6 +251,7 @@ public class SQLitePlugin extends CordovaPlugin {
                 Log.d("TAG", "mydb.close(), dbname is " + dbname);
                 mydb.close();
                 dbmap.remove(dbname);
+                threadmap.remove(dbname);
             }
         }
     }
@@ -290,18 +299,22 @@ public class SQLitePlugin extends CordovaPlugin {
     private void executeSqlBatchInBackground(final String dbName,
                                              final String[] queryarr, final JSONArray[] jsonparams,
                                              final String[] queryIDs, final CallbackContext cbc) {
-        new AsyncTask<Void,Void,Void>(){
+        LooperThread thread;
 
+        synchronized (this) {
+            thread = threadmap.get(dbName);
+        }
+
+        thread.getHandler().post(new Runnable() {
             @Override
-            protected Void doInBackground(Void... voids) {
+            public void run() {
                 SQLiteDatabase mydb;
                 synchronized (SQLitePlugin.this) {
                     mydb = dbmap.get(dbName);
                 }
                 executeSqlBatch(dbName, queryarr, jsonparams, queryIDs, mydb, cbc);
-                return null;
             }
-        }.execute((Void)null);
+        });
     }
 
     /**
@@ -645,4 +658,19 @@ public class SQLitePlugin extends CordovaPlugin {
         backgroundExecuteSqlBatch,
     }
 
+    private static class LooperThread extends Thread {
+        public Handler mHandler;
+
+        public void run() {
+            Looper.prepare();
+
+            mHandler = new Handler();
+
+            Looper.loop();
+        }
+
+        public Handler getHandler() {
+            return mHandler;
+        }
+    }
 }

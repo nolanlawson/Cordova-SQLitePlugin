@@ -17,6 +17,7 @@ License for common Javascript: MIT or Apache
     nextTick = window.setImmediate || (fun) ->
       window.setTimeout(fun, 0)
       return
+    transactionId = 0
 
 - SQLitePlugin object is defined by a constructor function and prototype member functions:
 
@@ -158,6 +159,7 @@ License for common Javascript: MIT or Apache
       @txlock = txlock
       @readOnly = readOnly
       @executes = []
+      @id = transactionId++;
 
       if txlock
         @executeSql "BEGIN", [], null, (tx, err) ->
@@ -194,7 +196,7 @@ License for common Javascript: MIT or Apache
         success: success
         error: error
         qid: qid
-
+        txid: @id
         sql: sql
         params: values || []
 
