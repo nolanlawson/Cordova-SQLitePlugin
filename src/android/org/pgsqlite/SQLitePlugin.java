@@ -11,6 +11,7 @@ import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteException;
 import android.database.sqlite.SQLiteStatement;
 
+import android.os.AsyncTask;
 import android.util.Base64;
 import android.util.Log;
 
@@ -125,7 +126,7 @@ public class SQLitePlugin extends CordovaPlugin {
                     }
                 }
 
-                Cursor myCursor = this.getDatabase(dbname).rawQuery(query, params);
+                Cursor myCursor = dbmap.get(dbname).rawQuery(query, params);
 
                 String result = this.getRowsResultFromQuery(myCursor).getJSONArray("rows").toString();
 
@@ -167,7 +168,13 @@ public class SQLitePlugin extends CordovaPlugin {
                 if (action == Action.backgroundExecuteSqlBatch) {
                     this.executeSqlBatchInBackground(dbname, queries, jsonparams, queryIDs, cbc);
                 } else {
-                    this.executeSqlBatch(dbname, queries, jsonparams, queryIDs, cbc);
+
+                    SQLiteDatabase mydb;
+                    synchronized(this) {
+                        mydb = dbmap.get(dbname);
+                    }
+
+                    this.executeSqlBatch(dbname, queries, jsonparams, queryIDs, mydb, cbc);
                 }
                 break;
         }
@@ -180,10 +187,12 @@ public class SQLitePlugin extends CordovaPlugin {
      */
     @Override
     public void onDestroy() {
-        while (!dbmap.isEmpty()) {
-            String dbname = dbmap.keySet().iterator().next();
-            this.closeDatabase(dbname);
-            dbmap.remove(dbname);
+        synchronized (this) {
+            while (!dbmap.isEmpty()) {
+                String dbname = dbmap.keySet().iterator().next();
+                this.closeDatabase(dbname);
+                dbmap.remove(dbname);
+            }
         }
     }
 
@@ -198,8 +207,9 @@ public class SQLitePlugin extends CordovaPlugin {
      * @param password The database password or null.
      */
     private void openDatabase(String dbname, String password) {
-        synchronized(this) {
-            if (this.getDatabase(dbname) != null) {
+
+        synchronized (this) {
+            if (dbmap.get(dbname) != null) {
                 this.closeDatabase(dbname);
             }
 
@@ -211,6 +221,7 @@ public class SQLitePlugin extends CordovaPlugin {
 
             Log.v("info", "Open sqlite db: " + dbfile.getAbsolutePath());
 
+            Log.d("Thread", Long.toString(Thread.currentThread().getId(), 16));
             Log.d("TAG", "SQLiteDatabase.openOrCreateDatabase(), dbName is: " + dbname);
             SQLiteDatabase mydb = SQLiteDatabase.openOrCreateDatabase(dbfile, null);
 
@@ -221,16 +232,17 @@ public class SQLitePlugin extends CordovaPlugin {
     /**
      * Close a database.
      *
-     * @param dbName The name of the database-NOT including its extension.
+     * @param dbname The name of the database-NOT including its extension.
      */
-    private void closeDatabase(String dbName) {
-        synchronized(this) {
-            SQLiteDatabase mydb = this.getDatabase(dbName);
+    private void closeDatabase(String dbname) {
+        synchronized (this) {
+            SQLiteDatabase mydb = dbmap.get(dbname);
 
             if (mydb != null) {
-                Log.d("TAG", "mydb.close(), dbname is "+ dbName);
+                Log.d("Thread", Long.toString(Thread.currentThread().getId(), 16));
+                Log.d("TAG", "mydb.close(), dbname is " + dbname);
                 mydb.close();
-                dbmap.remove(dbName);
+                dbmap.remove(dbname);
             }
         }
     }
@@ -242,35 +254,28 @@ public class SQLitePlugin extends CordovaPlugin {
      * @return true if successful or false if an exception was encountered
      */
     private boolean deleteDatabase(String dbname) {
-        boolean status = false; // assume the worst case:
+        synchronized (this) {
+            boolean status = false; // assume the worst case:
 
-        if (this.getDatabase(dbname) != null) {
-            this.closeDatabase(dbname);
+            if (dbmap.get(dbname) != null) {
+                closeDatabase(dbname);
+            }
+
+            File dbfile = this.cordova.getActivity().getDatabasePath(dbname);
+
+            Log.v("info", "delete sqlite db: " + dbfile.getAbsolutePath());
+
+            // Use try & catch just in case android.os.Build.VERSION.SDK_INT >= 16 was lying:
+            try {
+                status = SQLiteDatabase.deleteDatabase(dbfile);
+            } catch (Exception ex) {
+                // log & give up:
+                Log.v("executeSqlBatch", "deleteDatabase(): Error=" + ex.getMessage());
+                ex.printStackTrace();
+            }
+
+            return status;
         }
-
-        File dbfile = this.cordova.getActivity().getDatabasePath(dbname);
-
-        Log.v("info", "delete sqlite db: " + dbfile.getAbsolutePath());
-
-        // Use try & catch just in case android.os.Build.VERSION.SDK_INT >= 16 was lying:
-        try {
-            status = SQLiteDatabase.deleteDatabase(dbfile);
-        } catch (Exception ex) {
-            // log & give up:
-            Log.v("executeSqlBatch", "deleteDatabase(): Error=" + ex.getMessage());
-            ex.printStackTrace();
-        }
-
-        return status;
-    }
-
-    /**
-     * Get a database from the db map.
-     *
-     * @param dbname The name of the database.
-     */
-    private SQLiteDatabase getDatabase(String dbname) {
-        return dbmap.get(dbname);
     }
 
     /**
@@ -285,15 +290,18 @@ public class SQLitePlugin extends CordovaPlugin {
     private void executeSqlBatchInBackground(final String dbName,
                                              final String[] queryarr, final JSONArray[] jsonparams,
                                              final String[] queryIDs, final CallbackContext cbc) {
-        final SQLitePlugin myself = this;
+        new AsyncTask<Void,Void,Void>(){
 
-        this.cordova.getThreadPool().execute(new Runnable() {
-            public void run() {
-                synchronized (myself) {
-                    myself.executeSqlBatch(dbName, queryarr, jsonparams, queryIDs, cbc);
+            @Override
+            protected Void doInBackground(Void... voids) {
+                SQLiteDatabase mydb;
+                synchronized (SQLitePlugin.this) {
+                    mydb = dbmap.get(dbName);
                 }
+                executeSqlBatch(dbName, queryarr, jsonparams, queryIDs, mydb, cbc);
+                return null;
             }
-        });
+        }.execute((Void)null);
     }
 
     /**
@@ -306,16 +314,14 @@ public class SQLitePlugin extends CordovaPlugin {
      * @param cbc        Callback context from Cordova API
      */
     private void executeSqlBatch(String dbname, String[] queryarr, JSONArray[] jsonparams,
-                                 String[] queryIDs, CallbackContext cbc) {
-        SQLiteDatabase mydb = this.getDatabase(dbname);
-
-        if (mydb == null) {
-            return;
-        }
+                                 String[] queryIDs, SQLiteDatabase mydb, CallbackContext cbc) {
 
         String query = "";
         String query_id = "";
         int len = queryarr.length;
+
+        Log.d("Thread", Long.toString(Thread.currentThread().getId(), 16));
+        Log.d("TAG", "queries: " + java.util.Arrays.toString(queryarr));
 
         JSONArray batchResults = new JSONArray();
 
@@ -356,6 +362,8 @@ public class SQLitePlugin extends CordovaPlugin {
 
                     // Use try & catch just in case android.os.Build.VERSION.SDK_INT >= 11 is lying:
                     try {
+                        Log.d("Thread", Long.toString(Thread.currentThread().getId(), 16));
+                        Log.d("TAG", "executeUpdateOrDelete();, dbname is: " + dbname);
                         rowsAffected = myStatement.executeUpdateDelete();
                         // Indicate valid results:
                         needRawQuery = false;
@@ -397,8 +405,9 @@ public class SQLitePlugin extends CordovaPlugin {
                     }
 
                     long insertId = -1; // (invalid)
-
                     try {
+                        Log.d("Thread", Long.toString(Thread.currentThread().getId(), 16));
+                        Log.d("TAG", "executeInsert();, dbname is: " + dbname);
                         insertId = myStatement.executeInsert();
                     } catch (SQLiteException ex) {
                         ex.printStackTrace();
@@ -416,6 +425,7 @@ public class SQLitePlugin extends CordovaPlugin {
                 if (query.toLowerCase().startsWith("begin")) {
                     needRawQuery = false;
                     try {
+                        Log.d("Thread", Long.toString(Thread.currentThread().getId(), 16));
                         Log.d("TAG", "mydb.beginTransaction();, dbname is: " + dbname);
                         mydb.beginTransaction();
 
@@ -431,8 +441,10 @@ public class SQLitePlugin extends CordovaPlugin {
                 if (query.toLowerCase().startsWith("commit")) {
                     needRawQuery = false;
                     try {
+                        Log.d("Thread", Long.toString(Thread.currentThread().getId(), 16));
                         Log.d("TAG", "mydb.setTransactionSuccessful();, dbname is: " + dbname);
                         mydb.setTransactionSuccessful();
+                        Log.d("Thread", Long.toString(Thread.currentThread().getId(), 16));
                         Log.d("TAG", "mydb.endTransaction();, dbname is: " + dbname);
                         mydb.endTransaction();
 
@@ -448,6 +460,7 @@ public class SQLitePlugin extends CordovaPlugin {
                 if (query.toLowerCase().startsWith("rollback")) {
                     needRawQuery = false;
                     try {
+                        Log.d("Thread", Long.toString(Thread.currentThread().getId(), 16));
                         Log.d("TAG", "mydb.endTransaction();, dbname is: " + dbname);
                         mydb.endTransaction();
 
@@ -474,6 +487,7 @@ public class SQLitePlugin extends CordovaPlugin {
                                 params[j] = jsonparams[i].getString(j);
                         }
                     }
+                    Log.d("Thread", Long.toString(Thread.currentThread().getId(), 16));
                     Log.d("TAG", "mydb.rawQuery();, dbname is: " + dbname);
                     Cursor myCursor = mydb.rawQuery(query, params);
 
