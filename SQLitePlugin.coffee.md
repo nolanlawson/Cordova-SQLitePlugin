@@ -17,7 +17,8 @@ License for common Javascript: MIT or Apache
     nextTick = window.setImmediate || (fun) ->
       window.setTimeout(fun, 0)
       return
-    transactionId = 0
+    transactionIdCounter = 0
+    queryIdCounter = 0
 
 - SQLitePlugin object is defined by a constructor function and prototype member functions:
 
@@ -159,7 +160,7 @@ License for common Javascript: MIT or Apache
       @txlock = txlock
       @readOnly = readOnly
       @executes = []
-      @id = transactionId++;
+      @id = transactionIdCounter++
 
       if txlock
         @executeSql "BEGIN", [], null, (tx, err) ->
@@ -190,7 +191,7 @@ License for common Javascript: MIT or Apache
         return
 
 
-      qid = @executes.length
+      qid = queryIdCounter++
 
       @executes.push
         success: success
@@ -279,6 +280,7 @@ License for common Javascript: MIT or Apache
           # for ios version:
           query: [request.sql].concat(request.params)
           sql: request.sql
+          txid: tx.id
           params: request.params
 
         i++

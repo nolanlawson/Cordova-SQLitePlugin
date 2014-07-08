@@ -11,7 +11,6 @@ import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteException;
 import android.database.sqlite.SQLiteStatement;
 
-import android.os.AsyncTask;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Base64;
@@ -21,6 +20,7 @@ import java.io.File;
 import java.lang.IllegalArgumentException;
 import java.lang.Number;
 import java.util.HashMap;
+import java.util.PriorityQueue;
 
 import org.apache.cordova.CallbackContext;
 import org.apache.cordova.CordovaPlugin;
@@ -36,6 +36,10 @@ public class SQLitePlugin extends CordovaPlugin {
     static HashMap<String, SQLiteDatabase> dbmap = new HashMap<String, SQLiteDatabase>();
 
     static HashMap<String, LooperThread> threadmap = new HashMap<String, LooperThread>();
+
+    static HashMap<String, PriorityQueue<ExecuteSqlCall>> queuemap = new HashMap<String, PriorityQueue<ExecuteSqlCall>>();
+
+    static HashMap<String, Integer> currentTransactionMap = new HashMap<String, Integer>();
 
     /**
      * Get a SQLiteDatabase reference from the db map (public static accessor).
@@ -140,7 +144,8 @@ public class SQLitePlugin extends CordovaPlugin {
             case executeBatchTransaction:
             case backgroundExecuteSqlBatch:
                 String[] queries = null;
-                String[] queryIDs = null;
+                int[] queryIDs = null;
+                int transactionId = -1;
 
                 JSONArray jsonArr = null;
                 int paramLen = 0;
@@ -156,13 +161,14 @@ public class SQLitePlugin extends CordovaPlugin {
                 } else {
                     int len = txargs.length();
                     queries = new String[len];
-                    queryIDs = new String[len];
+                    queryIDs = new int[len];
                     jsonparams = new JSONArray[len];
 
                     for (int i = 0; i < len; i++) {
                         JSONObject a = txargs.getJSONObject(i);
                         queries[i] = a.getString("sql");
-                        queryIDs[i] = a.getString("qid");
+                        queryIDs[i] = a.getInt("qid");
+                        transactionId = a.getInt("txid");
                         jsonArr = a.getJSONArray("params");
                         paramLen = jsonArr.length();
                         jsonparams[i] = jsonArr;
@@ -170,7 +176,7 @@ public class SQLitePlugin extends CordovaPlugin {
                 }
 
                 if (action == Action.backgroundExecuteSqlBatch) {
-                    this.executeSqlBatchInBackground(dbname, queries, jsonparams, queryIDs, cbc);
+                    this.executeSqlBatchInBackground(dbname, transactionId, queries, jsonparams, queryIDs, cbc);
                 } else {
 
                     SQLiteDatabase mydb;
@@ -178,7 +184,7 @@ public class SQLitePlugin extends CordovaPlugin {
                         mydb = dbmap.get(dbname);
                     }
 
-                    this.executeSqlBatch(dbname, queries, jsonparams, queryIDs, mydb, cbc);
+                    this.executeSqlBatch(dbname, transactionId, queries, jsonparams, queryIDs, mydb, cbc);
                 }
                 break;
         }
@@ -197,6 +203,7 @@ public class SQLitePlugin extends CordovaPlugin {
                 this.closeDatabase(dbname);
                 dbmap.remove(dbname);
                 threadmap.remove(dbname);
+                queuemap.remove(dbname);
             }
         }
     }
@@ -234,6 +241,7 @@ public class SQLitePlugin extends CordovaPlugin {
             LooperThread thread = new LooperThread();
             thread.start();
             threadmap.put(dbname, thread);
+            queuemap.put(dbname, new PriorityQueue<ExecuteSqlCall>());
         }
     }
 
@@ -252,6 +260,7 @@ public class SQLitePlugin extends CordovaPlugin {
                 mydb.close();
                 dbmap.remove(dbname);
                 threadmap.remove(dbname);
+                queuemap.remove(dbname);
             }
         }
     }
@@ -296,26 +305,29 @@ public class SQLitePlugin extends CordovaPlugin {
      * @param queryIDs   Array of query ids
      * @param cbc        Callback context from Cordova API
      */
-    private void executeSqlBatchInBackground(final String dbName,
-                                             final String[] queryarr, final JSONArray[] jsonparams,
-                                             final String[] queryIDs, final CallbackContext cbc) {
+    private void executeSqlBatchInBackground(String dbName, int transactionId,
+                                             String[] queryarr, JSONArray[] jsonparams,
+                                             int[] queryIDs, CallbackContext cbc) {
+
+
+        PriorityQueue<ExecuteSqlCall> queue;
         LooperThread thread;
 
         synchronized (this) {
+            queue = queuemap.get(dbName);
             thread = threadmap.get(dbName);
         }
 
-        thread.getHandler().post(new Runnable() {
-            @Override
-            public void run() {
-                SQLiteDatabase mydb;
-                synchronized (SQLitePlugin.this) {
-                    mydb = dbmap.get(dbName);
-                }
-                executeSqlBatch(dbName, queryarr, jsonparams, queryIDs, mydb, cbc);
-            }
-        });
+        if (queue == null || thread == null) {
+            return;
+        }
+
+        Log.d("TAG", "adding: " + java.util.Arrays.toString(queryarr));
+        queue.add(new ExecuteSqlCall(dbName, transactionId, queryarr, jsonparams, queryIDs, cbc));
+
+        thread.getHandler().post(new ProcessQueueRunnable(queue, thread));
     }
+
 
     /**
      * Executes a batch request and sends the results via sendJavascriptCB().
@@ -326,11 +338,10 @@ public class SQLitePlugin extends CordovaPlugin {
      * @param queryIDs   Array of query ids
      * @param cbc        Callback context from Cordova API
      */
-    private void executeSqlBatch(String dbname, String[] queryarr, JSONArray[] jsonparams,
-                                 String[] queryIDs, SQLiteDatabase mydb, CallbackContext cbc) {
+    private void executeSqlBatch(String dbname, int transactionId, String[] queryarr, JSONArray[] jsonparams,
+                                 int[] queryIDs, SQLiteDatabase mydb, CallbackContext cbc) {
 
         String query = "";
-        String query_id = "";
         int len = queryarr.length;
 
         Log.d("Thread", Long.toString(Thread.currentThread().getId(), 16));
@@ -339,7 +350,7 @@ public class SQLitePlugin extends CordovaPlugin {
         JSONArray batchResults = new JSONArray();
 
         for (int i = 0; i < len; i++) {
-            query_id = queryIDs[i];
+            int query_id = queryIDs[i];
 
             JSONObject queryResult = null;
             String errorMessage = "unknown";
@@ -441,6 +452,7 @@ public class SQLitePlugin extends CordovaPlugin {
                         Log.d("Thread", Long.toString(Thread.currentThread().getId(), 16));
                         Log.d("TAG", "mydb.beginTransaction();, dbname is: " + dbname);
                         mydb.beginTransaction();
+                        currentTransactionMap.put(dbname, transactionId);
 
                         queryResult = new JSONObject();
                         queryResult.put("rowsAffected", 0);
@@ -460,6 +472,7 @@ public class SQLitePlugin extends CordovaPlugin {
                         Log.d("Thread", Long.toString(Thread.currentThread().getId(), 16));
                         Log.d("TAG", "mydb.endTransaction();, dbname is: " + dbname);
                         mydb.endTransaction();
+                        currentTransactionMap.remove(dbname);
 
                         queryResult = new JSONObject();
                         queryResult.put("rowsAffected", 0);
@@ -476,6 +489,7 @@ public class SQLitePlugin extends CordovaPlugin {
                         Log.d("Thread", Long.toString(Thread.currentThread().getId(), 16));
                         Log.d("TAG", "mydb.endTransaction();, dbname is: " + dbname);
                         mydb.endTransaction();
+                        currentTransactionMap.remove(dbname);
 
                         queryResult = new JSONObject();
                         queryResult.put("rowsAffected", 0);
@@ -504,9 +518,9 @@ public class SQLitePlugin extends CordovaPlugin {
                     Log.d("TAG", "mydb.rawQuery();, dbname is: " + dbname);
                     Cursor myCursor = mydb.rawQuery(query, params);
 
-                    if (query_id.length() > 0) {
-                        queryResult = this.getRowsResultFromQuery(myCursor);
-                    }
+                    queryResult = this.getRowsResultFromQuery(myCursor);
+
+                    Log.d("TAG", "results: " + queryResult.toString());
 
                     myCursor.close();
                 }
@@ -658,6 +672,17 @@ public class SQLitePlugin extends CordovaPlugin {
         backgroundExecuteSqlBatch,
     }
 
+    /**
+     * LooperThread, as discussed in https://developer.android.com/reference/android/os/Looper.html
+     *
+     * Basically this is a cheap way for us to get a single Thread that has a Handler and is
+     * guaranteed to run on the background.
+     *
+     * In other words: ask yourself the question, "If Android has a single UI thread, how can I get
+     * a _single_ background thread?" This is the answer.
+     *
+     *
+     */
     private static class LooperThread extends Thread {
         public Handler mHandler;
 
@@ -671,6 +696,85 @@ public class SQLitePlugin extends CordovaPlugin {
 
         public Handler getHandler() {
             return mHandler;
+        }
+    }
+
+    private static class ExecuteSqlCall implements Comparable<ExecuteSqlCall> {
+        private int transactionId;
+        private int maxQueryId;
+        private String[] queries;
+        private JSONArray[] jsonparams;
+        private int[] queryIDs;
+        private String dbName;
+        private CallbackContext cbc;
+
+        public ExecuteSqlCall(String dbName,
+                              int transactionId, String[] queries, JSONArray[] jsonparams,
+                              int[] queryIDs, CallbackContext cbc) {
+            this.dbName = dbName;
+            this.transactionId = transactionId;
+            this.queries = queries;
+            this.jsonparams = jsonparams;
+            this.queryIDs = queryIDs;
+            this.cbc = cbc;
+
+            this.maxQueryId = 0;
+
+            for (int queryId : queryIDs) {
+                if (queryId > this.maxQueryId) {
+                    this.maxQueryId = queryId;
+                }
+            }
+        }
+
+        @Override
+        public int compareTo(ExecuteSqlCall other) {
+            int tIdCompare = Integer.compare(transactionId, other.transactionId);
+            if (tIdCompare != 0) {
+                return tIdCompare;
+            }
+            return Integer.compare(maxQueryId, other.maxQueryId);
+        }
+    }
+
+    private class ProcessQueueRunnable implements Runnable {
+
+        private PriorityQueue<ExecuteSqlCall> queue;
+        private LooperThread thread;
+
+        public ProcessQueueRunnable(PriorityQueue<ExecuteSqlCall> queue, LooperThread thread) {
+            this.queue = queue;
+            this.thread = thread;
+        }
+
+        @Override
+        public void run() {
+
+            ExecuteSqlCall sqlCall = queue.peek();
+
+            if (sqlCall == null) { // queue is empty
+                return;
+            }
+            Integer currentTransactionId = currentTransactionMap.get(sqlCall.dbName);
+            if (currentTransactionId != null && currentTransactionId != sqlCall.transactionId) {
+                // some other transaction is in progress, need to wait
+                thread.getHandler().post(this);
+                return;
+            }
+
+            sqlCall = queue.poll();
+
+            SQLiteDatabase mydb;
+            synchronized (SQLitePlugin.this) {
+                mydb = dbmap.get(sqlCall.dbName);
+            }
+            Log.d("TAG", "executing: " + java.util.Arrays.toString(sqlCall.queries));
+            Log.d("TAG", "txId: " + sqlCall.transactionId);
+            Log.d("TAG", "qId: " + sqlCall.maxQueryId);
+            Log.d("TAG", "qIds: " + java.util.Arrays.toString(sqlCall.queryIDs));
+            executeSqlBatch(sqlCall.dbName, sqlCall.transactionId, sqlCall.queries, sqlCall.jsonparams,
+                    sqlCall.queryIDs, mydb, sqlCall.cbc);
+            thread.getHandler().post(this);
         }
     }
 }
