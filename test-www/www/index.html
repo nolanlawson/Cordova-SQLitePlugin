@@ -441,6 +441,60 @@
           blocked = false;
         });
 
+
+        test(suiteName + ' test simultaneous transactions', function () {
+          stop();
+
+          var db = openDatabase("Database-Simultaneous-Tx", "1.0", "Demo", DEFAULT_SIZE);
+
+          var numDone = 0;
+          function checkDone() {
+            if (++numDone == 2) {
+              start();
+            }
+          }
+
+          db.transaction(function(tx) {
+            tx.executeSql('DROP TABLE IF EXISTS test', [], function () {
+              tx.executeSql('CREATE TABLE test (name);');
+
+            });
+          }, function(err) { ok(false, err.message) }, function() {
+            db.transaction(function(tx) {
+              tx.executeSql('INSERT INTO test VALUES ("foo")', [], function () {
+                tx.executeSql('SELECT * FROM test', [], function (tx, res) {
+                  equal(res.rows.length, 1, 'only one row');
+                  equal(res.rows.item(0).name, 'foo');
+
+                  tx.executeSql('SELECT * FROM bogustable'); // force rollback
+                });
+              });
+            }, function(err) {
+              ok(true, 'expected error');
+              checkDone();
+            }, function () {
+              ok(false, 'should have rolled back');
+            });
+
+            db.transaction(function(tx) {
+              tx.executeSql('INSERT INTO test VALUES ("bar")', [], function () {
+                tx.executeSql('SELECT * FROM test', [], function (tx, res) {
+                  equal(res.rows.length, 1, 'only one row');
+                  equal(res.rows.item(0).name, 'bar');
+
+                  tx.executeSql('SELECT * FROM bogustable'); // force rollback
+                });
+              });
+            }, function(err) {
+              ok(true, 'expected error');
+              checkDone();
+            }, function () {
+              ok(false, 'should have rolled back');
+            });
+          });
+
+        });
+
         /**
          test(suiteName + "PRAGMA & multiple databases", function() {
           var db = openDatabase("DB1", "1.0", "Demo", DEFAULT_SIZE);
