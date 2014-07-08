@@ -48,13 +48,13 @@ public class SQLitePlugin extends CordovaPlugin {
     /**
      * Executes the request and returns PluginResult.
      *
-     * @param action The action to execute.
+     * @param actionAsString The action to execute.
      * @param args   JSONArry of arguments for the plugin.
      * @param cbc    Callback context from Cordova API
      * @return       Whether the action was valid.
      */
     @Override
-    public boolean execute(String actionAsString, JSONArray args, CallbackContext cbc) {
+    public boolean execute(String actionAsString, final JSONArray args, final CallbackContext cbc) {
 
         Action action;
         try {
@@ -198,21 +198,24 @@ public class SQLitePlugin extends CordovaPlugin {
      * @param password The database password or null.
      */
     private void openDatabase(String dbname, String password) {
-        if (this.getDatabase(dbname) != null) {
-            this.closeDatabase(dbname);
+        synchronized(this) {
+            if (this.getDatabase(dbname) != null) {
+                this.closeDatabase(dbname);
+            }
+
+            File dbfile = this.cordova.getActivity().getDatabasePath(dbname);
+
+            if (!dbfile.exists()) {
+                dbfile.getParentFile().mkdirs();
+            }
+
+            Log.v("info", "Open sqlite db: " + dbfile.getAbsolutePath());
+
+            Log.d("TAG", "SQLiteDatabase.openOrCreateDatabase(), dbName is: " + dbname);
+            SQLiteDatabase mydb = SQLiteDatabase.openOrCreateDatabase(dbfile, null);
+
+            dbmap.put(dbname, mydb);
         }
-
-        File dbfile = this.cordova.getActivity().getDatabasePath(dbname);
-
-        if (!dbfile.exists()) {
-            dbfile.getParentFile().mkdirs();
-        }
-
-        Log.v("info", "Open sqlite db: " + dbfile.getAbsolutePath());
-
-        SQLiteDatabase mydb = SQLiteDatabase.openOrCreateDatabase(dbfile, null);
-
-        dbmap.put(dbname, mydb);
     }
 
     /**
@@ -221,11 +224,14 @@ public class SQLitePlugin extends CordovaPlugin {
      * @param dbName The name of the database-NOT including its extension.
      */
     private void closeDatabase(String dbName) {
-        SQLiteDatabase mydb = this.getDatabase(dbName);
+        synchronized(this) {
+            SQLiteDatabase mydb = this.getDatabase(dbName);
 
-        if (mydb != null) {
-            mydb.close();
-            dbmap.remove(dbName);
+            if (mydb != null) {
+                Log.d("TAG", "mydb.close(), dbname is "+ dbName);
+                mydb.close();
+                dbmap.remove(dbName);
+            }
         }
     }
 
@@ -370,6 +376,8 @@ public class SQLitePlugin extends CordovaPlugin {
                     }
                 } // to HERE. }}
 
+                Log.d("q: ", query);
+
                 // INSERT:
                 if (query.toLowerCase().startsWith("insert") && jsonparams != null) {
                     needRawQuery = false;
@@ -408,6 +416,7 @@ public class SQLitePlugin extends CordovaPlugin {
                 if (query.toLowerCase().startsWith("begin")) {
                     needRawQuery = false;
                     try {
+                        Log.d("TAG", "mydb.beginTransaction();, dbname is: " + dbname);
                         mydb.beginTransaction();
 
                         queryResult = new JSONObject();
@@ -422,7 +431,9 @@ public class SQLitePlugin extends CordovaPlugin {
                 if (query.toLowerCase().startsWith("commit")) {
                     needRawQuery = false;
                     try {
+                        Log.d("TAG", "mydb.setTransactionSuccessful();, dbname is: " + dbname);
                         mydb.setTransactionSuccessful();
+                        Log.d("TAG", "mydb.endTransaction();, dbname is: " + dbname);
                         mydb.endTransaction();
 
                         queryResult = new JSONObject();
@@ -437,6 +448,7 @@ public class SQLitePlugin extends CordovaPlugin {
                 if (query.toLowerCase().startsWith("rollback")) {
                     needRawQuery = false;
                     try {
+                        Log.d("TAG", "mydb.endTransaction();, dbname is: " + dbname);
                         mydb.endTransaction();
 
                         queryResult = new JSONObject();
@@ -462,7 +474,7 @@ public class SQLitePlugin extends CordovaPlugin {
                                 params[j] = jsonparams[i].getString(j);
                         }
                     }
-
+                    Log.d("TAG", "mydb.rawQuery();, dbname is: " + dbname);
                     Cursor myCursor = mydb.rawQuery(query, params);
 
                     if (query_id.length() > 0) {
