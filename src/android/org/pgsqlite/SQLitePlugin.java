@@ -8,6 +8,7 @@ package org.pgsqlite;
 
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
+import android.database.sqlite.SQLiteDatabaseLockedException;
 import android.database.sqlite.SQLiteException;
 import android.database.sqlite.SQLiteStatement;
 
@@ -35,6 +36,27 @@ public class SQLitePlugin extends CordovaPlugin {
     private final HashMap<String, SQLiteDatabase> dbmap = new HashMap<String, SQLiteDatabase>();
 
     private final Executor backgroundThreadPool = Executors.newFixedThreadPool(1);
+
+
+    /**
+     * Called when the WebView does a top-level navigation or refreshes.
+     *
+     * Plugins should stop any long-running processes and clean up internal state.
+     *
+     * Does nothing by default.
+     */
+    @Override
+    public void onReset() {
+        super.onReset();
+        Log.i(SQLitePlugin.class.getSimpleName(), "onReset");
+        synchronized (SQLitePlugin.class) {
+            while (!dbmap.isEmpty()) {
+                String dbname = dbmap.keySet().iterator().next();
+                this.closeDatabase(dbname);
+                dbmap.remove(dbname);
+            }
+        }
+    }
 
     /**
      * NOTE: Using default constructor, explicit constructor no longer required.
@@ -87,6 +109,7 @@ public class SQLitePlugin extends CordovaPlugin {
                 o = args.getJSONObject(0);
                 dbname = o.getString("path");
 
+                Log.i(SQLitePlugin.class.getSimpleName(), "just closing");
                 this.closeDatabase(dbname);
                 break;
             case delete:
@@ -182,19 +205,6 @@ public class SQLitePlugin extends CordovaPlugin {
         return status;
     }
 
-    /**
-     * Clean up and close all open databases.
-     */
-    @Override
-    public void onDestroy() {
-        Log.i(SQLitePlugin.class.getSimpleName(), "onDestroy");
-        while (!dbmap.isEmpty()) {
-            String dbname = dbmap.keySet().iterator().next();
-            this.closeDatabase(dbname);
-            dbmap.remove(dbname);
-        }
-    }
-
     // --------------------------------------------------------------------------
     // LOCAL METHODS
     // --------------------------------------------------------------------------
@@ -205,27 +215,42 @@ public class SQLitePlugin extends CordovaPlugin {
      * @param dbname   The name of the database-NOT including its extension.
      * @param password The database password or null.
      */
-    private void openDatabase(String dbname, String password) {
-        if (this.getDatabase(dbname) != null) {
-            this.closeDatabase(dbname);
-        }
+    private void openDatabase(final String dbname, final String password) {
+        backgroundThreadPool.execute(new Runnable() {
+            @Override
+            public void run() {
+                Log.i(SQLitePlugin.class.getSimpleName(), "opening: " + dbname);
+                SQLiteDatabase existingDB = getDatabase(dbname);
+                if (existingDB != null && existingDB.isOpen()) {
+                    Log.i(SQLitePlugin.class.getSimpleName(), "already open");
+                    return; // nothing to do
+                }
 
-        File dbfile = this.cordova.getActivity().getDatabasePath(dbname);
+                File dbfile = cordova.getActivity().getDatabasePath(dbname);
 
-        if (!dbfile.exists()) {
-            dbfile.getParentFile().mkdirs();
-        }
+                if (!dbfile.exists()) {
+                    dbfile.getParentFile().mkdirs();
+                }
 
-        Log.v("info", "Open sqlite db: " + dbfile.getAbsolutePath());
+                Log.v("info", "Open sqlite db: " + dbfile.getAbsolutePath());
 
-        SQLiteDatabase mydb;
-        synchronized (SQLitePlugin.class) {
-            Log.d(SQLitePlugin.class.getSimpleName(), "openOrCreateDatabase(): " + dbname);
-            mydb = SQLiteDatabase.openOrCreateDatabase(dbfile, null);
-            Log.d(SQLitePlugin.class.getSimpleName(), "opened!");
-        }
+                SQLiteDatabase mydb = null;
+                synchronized (SQLitePlugin.class) {
+                    Log.d(SQLitePlugin.class.getSimpleName(), "openOrCreateDatabase(): " + dbname);
+                    try {
+                        mydb = SQLiteDatabase.openOrCreateDatabase(dbfile, null);
+                    } catch (SQLiteDatabaseLockedException e) {
+                        Log.e(SQLitePlugin.class.getSimpleName(), "db locked", e);
+                    }
+                    Log.d(SQLitePlugin.class.getSimpleName(), "opened!");
+                }
 
-        dbmap.put(dbname, mydb);
+                if (mydb != null) {
+                    dbmap.put(dbname, mydb);
+                }
+            }
+        });
+
     }
 
     /**
@@ -255,6 +280,7 @@ public class SQLitePlugin extends CordovaPlugin {
     private boolean deleteDatabase(String dbname) {
         boolean status = false; // assume the worst case:
 
+        Log.i(SQLitePlugin.class.getSimpleName(), "deleteDatabase");
         if (this.getDatabase(dbname) != null) {
             this.closeDatabase(dbname);
         }
@@ -298,10 +324,13 @@ public class SQLitePlugin extends CordovaPlugin {
     private void executeSqlBatchInBackground(final String dbName,
                                              final String[] queryarr, final JSONArray[] jsonparams,
                                              final String[] queryIDs, final CallbackContext cbc) {
+        Log.i(SQLitePlugin.class.getSimpleName(), "executeSqlBatchInBackground(): " + java.util.Arrays.toString(queryarr));
         backgroundThreadPool.execute(new Runnable() {
             public void run() {
                 synchronized (SQLitePlugin.class) {
+                    Log.i(SQLitePlugin.class.getSimpleName(), "executeSqlBatchInBackground() real bg: " + java.util.Arrays.toString(queryarr));
                     executeSqlBatch(dbName, queryarr, jsonparams, queryIDs, cbc);
+                    Log.i(SQLitePlugin.class.getSimpleName(), "executeSqlBatchInBackground() real bg done: " + java.util.Arrays.toString(queryarr));
                 }
             }
         });
