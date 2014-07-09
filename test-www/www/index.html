@@ -360,6 +360,50 @@
           });
         });
 
+        test(suiteName + ' test deleteDatabase()', function () {
+
+          if (isNative) {
+            ok(true, 'skip');
+            return;
+          }
+
+          stop();
+          var db = openDatabase("DB-Deletable", "1.0", "Demo", DEFAULT_SIZE);
+
+          // insert some stuff
+          db.transaction(function(tx) {
+            tx.executeSql('DROP TABLE IF EXISTS test');
+            tx.executeSql('CREATE TABLE IF NOT EXISTS test (name)', [], function () {
+              tx.executeSql('INSERT INTO test VALUES (?)', ['foo']);
+            });
+          }, function (e) { ok(false, 'error: ' + e); }, function () {
+            // check that we can read it
+            db.transaction(function(tx) {
+              tx.executeSql('SELECT * FROM test', [], function (tx, res) {
+                equal(res.rows.item(0).name, 'foo');
+              });
+            }, function (e) { ok(false, 'error: ' + e); }, function () {
+              window.sqlitePlugin.deleteDatabase("DB-Deletable", function () {
+
+                // check that the data's gone
+                db.transaction(function(tx) {
+                  tx.executeSql('SELECT * FROM test', [], function (tx, res) {
+                  });
+                }, function (e) {
+                  start();
+                  ok(true, 'got error like we expected');
+                },
+                function () {
+                  start();
+                  ok(false, 'expected an error');
+                });
+              }, function (e) {
+                ok(false, 'error: ' + e);
+              })
+            });
+          });
+        });
+
         test(suiteName + "readTransaction should throw on modification", function() {
           stop();
           var db = openDatabase("Database-readonly", "1.0", "Demo", DEFAULT_SIZE);
@@ -515,7 +559,6 @@
             });
           });
         });
-
         test(suiteName + ' test simultaneous transactions, different dbs', function () {
           stop();
 

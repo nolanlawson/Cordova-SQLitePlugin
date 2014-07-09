@@ -405,11 +405,13 @@
       return new SQLitePlugin(openargs, okcb, errorcb);
     }),
     deleteDb: function(databaseName, success, error) {
-      return cordova.exec(success, error, "SQLitePlugin", "delete", [
-        {
-          path: databaseName
-        }
-      ]);
+      nextTick(function() {
+        cordova.exec(success, error, "SQLitePlugin", "delete", [
+          {
+            path: databaseName
+          }
+        ]);
+      });
     }
   };
 

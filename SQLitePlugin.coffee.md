@@ -391,7 +391,10 @@ License for common Javascript: MIT or Apache
         new SQLitePlugin openargs, okcb, errorcb
 
       deleteDb: (databaseName, success, error) ->
-        cordova.exec success, error, "SQLitePlugin", "delete", [{ path: databaseName }]
+        nextTick ->
+          cordova.exec success, error, "SQLitePlugin", "delete", [{ path: databaseName }]
+          return
+        return
 
 ### Exported API:
 

@@ -66,7 +66,10 @@ public class SQLitePlugin extends CordovaPlugin {
         }
 
         try {
-            return executeAndPossiblyThrow(action, args, cbc);
+            Log.d("tag", "executing: " + actionAsString);
+            boolean res = executeAndPossiblyThrow(action, args, cbc);
+            Log.d("tag", "returning: " + res);
+            return res;
         } catch (JSONException e) {
             // TODO: signal JSON problem to JS
             Log.e(SQLitePlugin.class.getSimpleName(), "unexpected error", e);
@@ -95,15 +98,11 @@ public class SQLitePlugin extends CordovaPlugin {
                 this.closeDatabase(dbname);
                 break;
             case delete:
-                /* Stop & give up if API < 16: */
-                if (android.os.Build.VERSION.SDK_INT < 16) {
-                    return false;
-                }
-
                 o = args.getJSONObject(0);
                 dbname = o.getString("path");
 
                 status = this.deleteDatabase(dbname);
+                Log.i("tag", "status from deleteDatabase was: " + status);
                 break;
             case executePragmaStatement:
                 dbname = args.getString(0);
@@ -172,6 +171,7 @@ public class SQLitePlugin extends CordovaPlugin {
                 break;
         }
 
+        Log.d("TAG", "returning: " + status);
         return status;
     }
 
@@ -236,11 +236,12 @@ public class SQLitePlugin extends CordovaPlugin {
      * @return true if successful or false if an exception was encountered
      */
     private boolean deleteDatabase(String dbname) {
-        boolean status = false; // assume the worst case:
-
+        /*
+        Log.v("info", "closing database: " + dbname);
         if (this.getDatabase(dbname) != null) {
             this.closeDatabase(dbname);
         }
+        Log.v("info", "closed database: " + dbname);
 
         File dbfile = this.cordova.getActivity().getDatabasePath(dbname);
 
@@ -248,14 +249,16 @@ public class SQLitePlugin extends CordovaPlugin {
 
         // Use try & catch just in case android.os.Build.VERSION.SDK_INT >= 16 was lying:
         try {
-            status = SQLiteDatabase.deleteDatabase(dbfile);
-        } catch (Exception ex) {
+            Log.v("info", "deleting database: " + dbfile);
+            return SQLiteDatabase.deleteDatabase(dbfile);
+        } catch (Exception e) {
             // log & give up:
-            Log.v("executeSqlBatch", "deleteDatabase(): Error=" + ex.getMessage());
-            ex.printStackTrace();
+            Log.e(SQLitePlugin.class.getSimpleName(), "couldn't delete because old SDK_INT", e);
+            //cordova.getActivity().deleteDatabase(dbfile.getAbsolutePath());
         }
 
-        return status;
+        return false;*/
+        return true;
     }
 
     /**
