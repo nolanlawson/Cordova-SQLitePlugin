@@ -118,7 +118,7 @@ public class SQLitePlugin extends CordovaPlugin {
         });
     }
 
-    private boolean executeAndPossiblyThrow(Action action, JSONArray args, CallbackContext cbc)
+    private boolean executeAndPossiblyThrow(Action action, JSONArray args, final CallbackContext cbc)
             throws JSONException {
 
         boolean status = true;
@@ -146,9 +146,19 @@ public class SQLitePlugin extends CordovaPlugin {
 
                 // deleteDatabase() requires an async callback
                 if (status) {
-                    cbc.success();
+                    cordova.getActivity().runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            cbc.success();
+                        }
+                    });
                 } else {
-                    cbc.error("couldn't delete database");
+                    cordova.getActivity().runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            cbc.error("couldn't delete database");
+                        }
+                    });
                 }
                 break;
             case executePragmaStatement:
@@ -365,7 +375,7 @@ public class SQLitePlugin extends CordovaPlugin {
      */
     @SuppressLint("NewApi")
     private void executeSqlBatch(String dbname, String[] queryarr, JSONArray[] jsonparams,
-                                 String[] queryIDs, CallbackContext cbc) {
+                                 String[] queryIDs, final CallbackContext cbc) {
 
         SQLiteDatabase mydb = getDatabase(dbname);
 
@@ -567,9 +577,17 @@ public class SQLitePlugin extends CordovaPlugin {
             }
         }
 
-        Log.d("info", "calling success");
-        cbc.success(batchResults);
-        Log.d("info", "called success");
+        Log.d("info", "posting success to UI thread");
+        final JSONArray finalBatchResults = batchResults;
+        cordova.getActivity().runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                Log.d("info", "calling success");
+                cbc.success(finalBatchResults);
+                Log.d("info", "called success");
+            }
+        });
+
     }
 
     private int countRowsAffectedCompat(QueryType queryType, String query, JSONArray[] jsonparams,
