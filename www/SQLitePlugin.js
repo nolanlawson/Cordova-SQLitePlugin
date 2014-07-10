@@ -1,11 +1,9 @@
 (function() {
-  var IOS_REGEX, READ_ONLY_REGEX, SQLiteFactory, SQLitePlugin, SQLitePluginTransaction, argsArray, nextTick, root, txLocks;
+  var READ_ONLY_REGEX, SQLiteFactory, SQLitePlugin, SQLitePluginTransaction, argsArray, nextTick, root, txLocks;
 
   root = this;
 
   READ_ONLY_REGEX = /^\s*(?:drop|delete|insert|update|create)\s/i;
-
-  IOS_REGEX = /iP(?:ad|hone|od)/;
 
   txLocks = {};
 
@@ -48,12 +46,14 @@
     this.openSuccess = openSuccess;
     this.openError = openError;
     this.openSuccess || (this.openSuccess = function() {
+      console.log('cordova exec returned');
       console.log("DB opened: " + dbname);
     });
     this.openError || (this.openError = function(e) {
+      console.log('cordova exec returned');
       console.log(e.message);
     });
-    this.bg = !openargs.bgType ? IOS_REGEX.test(navigator.userAgent) : openargs.bgType === 1;
+    this.bg = typeof openargs.bgType === 'undefined' ? true : openargs.bgType === 1;
     this.open(this.openSuccess, this.openError);
   };
 
@@ -98,6 +98,7 @@
   SQLitePlugin.prototype.open = function(success, error) {
     if (!(this.dbname in this.openDBs)) {
       this.openDBs[this.dbname] = true;
+      console.log('cordova exec open');
       cordova.exec(success, error, "SQLitePlugin", "open", [this.openargs]);
     }
   };
@@ -105,6 +106,7 @@
   SQLitePlugin.prototype.close = function(success, error) {
     if (this.dbname in this.openDBs) {
       delete this.openDBs[this.dbname];
+      console.log('cordova exec close');
       cordova.exec(null, null, "SQLitePlugin", "close", [
         {
           path: this.dbname
@@ -284,6 +286,7 @@
     }
     mycb = function(result) {
       var q, r, res, type, _i, _len;
+      console.log("mycb result from cordova");
       for (_i = 0, _len = result.length; _i < _len; _i++) {
         r = result[_i];
         type = r.type;
@@ -298,6 +301,7 @@
       }
     };
     mycommand = this.db.bg ? "backgroundExecuteSqlBatch" : "executeSqlBatch";
+    console.log('cordova exec backgroundExecuteSqlBatch');
     cordova.exec(mycb, null, "SQLitePlugin", mycommand, [
       {
         dbargs: {

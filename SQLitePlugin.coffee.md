@@ -13,7 +13,6 @@ License for common Javascript: MIT or Apache
 ### constants:
 
     READ_ONLY_REGEX = /^\s*(?:drop|delete|insert|update|create)\s/i
-    IOS_REGEX = /iP(?:ad|hone|od)/
 
 ### globals:
 
@@ -61,19 +60,20 @@ License for common Javascript: MIT or Apache
 
       @openSuccess or
         @openSuccess = ->
+          console.log 'cordova exec returned'
           console.log "DB opened: " + dbname
           return
 
       @openError or
         @openError = (e) ->
+          console.log 'cordova exec returned'
           console.log e.message
           return
 
       #@bg = !!openargs.bgType and openargs.bgType == 1
       @bg =
-        if !openargs.bgType
-          # default to true for iOS only (due to memory issue)
-          IOS_REGEX.test(navigator.userAgent)
+        if typeof openargs.bgType == 'undefined'
+          true
         else
           openargs.bgType == 1
 
@@ -116,6 +116,7 @@ License for common Javascript: MIT or Apache
     SQLitePlugin::open = (success, error) ->
       unless @dbname of @openDBs
         @openDBs[@dbname] = true
+        console.log 'cordova exec open'
         cordova.exec success, error, "SQLitePlugin", "open", [ @openargs ]
 
       return
@@ -125,7 +126,7 @@ License for common Javascript: MIT or Apache
 
       if @dbname of @openDBs
         delete @openDBs[@dbname]
-
+        console.log 'cordova exec close'
         cordova.exec null, null, "SQLitePlugin", "close", [ { path: @dbname } ]
 
       return
@@ -285,7 +286,7 @@ License for common Javascript: MIT or Apache
         i++
 
       mycb = (result) ->
-        #console.log "mycb result #{JSON.stringify result}"
+        console.log "mycb result from cordova"
 
         for r in result
           type = r.type
@@ -301,6 +302,7 @@ License for common Javascript: MIT or Apache
         return
 
       mycommand = if @db.bg then "backgroundExecuteSqlBatch" else "executeSqlBatch"
+      console.log 'cordova exec backgroundExecuteSqlBatch'
       cordova.exec mycb, null, "SQLitePlugin", mycommand, [{dbargs: {dbname: @db.dbname}, executes: tropts}]
 
       return

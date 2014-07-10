@@ -20,7 +20,17 @@ import android.util.Log;
 import java.io.File;
 import java.lang.IllegalArgumentException;
 import java.lang.Number;
+import java.util.ArrayDeque;
 import java.util.HashMap;
+import java.util.Random;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.Executor;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -49,6 +59,8 @@ public class SQLitePlugin extends CordovaPlugin {
      * Multiple database map (static).
      */
     static HashMap<String, SQLiteDatabase> dbmap = new HashMap<String, SQLiteDatabase>();
+
+    private static final Executor backgroundExecutor = new SerialExecutor();
 
     /**
      * Get a SQLiteDatabase reference from the db map (public static accessor).
@@ -83,13 +95,27 @@ public class SQLitePlugin extends CordovaPlugin {
             return false;
         }
 
-        try {
-            return executeAndPossiblyThrow(action, args, cbc);
-        } catch (JSONException e) {
-            // TODO: signal JSON problem to JS
-            Log.e(SQLitePlugin.class.getSimpleName(), "unexpected error", e);
-            return false;
-        }
+        executeInBackground(action, args, cbc);
+
+        return true;
+    }
+
+    private void executeInBackground(final Action action, final JSONArray args, final CallbackContext cbc) {
+        final int id = new Random().nextInt();
+        Log.d(SQLitePlugin.class.getSimpleName(), "exec from foreground: " + id + " action: " + action);
+        backgroundExecutor.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Log.d(SQLitePlugin.class.getSimpleName(), "in background: " + id);
+                    executeAndPossiblyThrow(action, args, cbc);
+                    Log.d(SQLitePlugin.class.getSimpleName(), "done in background: " + id);
+                } catch (JSONException e) {
+                    // TODO: signal JSON problem to JS
+                    Log.e(SQLitePlugin.class.getSimpleName(), "unexpected error", e);
+                }
+            }
+        });
     }
 
     private boolean executeAndPossiblyThrow(Action action, JSONArray args, CallbackContext cbc)
@@ -184,15 +210,33 @@ public class SQLitePlugin extends CordovaPlugin {
                     }
                 }
 
-                if (action == Action.backgroundExecuteSqlBatch) {
-                    this.executeSqlBatchInBackground(dbname, queries, jsonparams, queryIDs, cbc);
-                } else {
-                    this.executeSqlBatch(dbname, queries, jsonparams, queryIDs, cbc);
-                }
+                Log.d("tag", "executing in background sqlBatch");
+                this.executeSqlBatchInBackground(dbname, queries, jsonparams, queryIDs, cbc);
                 break;
         }
 
         return status;
+    }
+
+    @Override
+    public void onReset() {
+        super.onReset();
+        Log.d(SQLitePlugin.class.getSimpleName(), "onReset()");
+        Log.d(SQLitePlugin.class.getSimpleName(), "waiting");
+        final BlockingQueue<Boolean> lock = new ArrayBlockingQueue<Boolean>(1);
+        backgroundExecutor.execute(new Runnable() {
+            @Override
+            public void run() {
+                Log.d(SQLitePlugin.class.getSimpleName(), "cleanup in background");
+                lock.offer(Boolean.TRUE);
+            }
+        });
+        try {
+            lock.take();
+            Log.d(SQLitePlugin.class.getSimpleName(), "done");
+        } catch (InterruptedException e) {
+            Log.e(SQLitePlugin.class.getSimpleName(), "unexpected", e);
+        }
     }
 
     /**
@@ -307,15 +351,7 @@ public class SQLitePlugin extends CordovaPlugin {
     private void executeSqlBatchInBackground(final String dbName,
                                              final String[] queryarr, final JSONArray[] jsonparams,
                                              final String[] queryIDs, final CallbackContext cbc) {
-        final SQLitePlugin myself = this;
-
-        this.cordova.getThreadPool().execute(new Runnable() {
-            public void run() {
-                synchronized (myself) {
-                    myself.executeSqlBatch(dbName, queryarr, jsonparams, queryIDs, cbc);
-                }
-            }
-        });
+        executeSqlBatch(dbName, queryarr, jsonparams, queryIDs, cbc);
     }
 
     /**
@@ -531,7 +567,9 @@ public class SQLitePlugin extends CordovaPlugin {
             }
         }
 
+        Log.d("info", "calling success");
         cbc.success(batchResults);
+        Log.d("info", "called success");
     }
 
     private int countRowsAffectedCompat(QueryType queryType, String query, JSONArray[] jsonparams,
@@ -775,5 +813,50 @@ public class SQLitePlugin extends CordovaPlugin {
         commit,
         rollback,
         other
+    }
+
+    private static final int CORE_POOL_SIZE = 1;
+    private static final int MAXIMUM_POOL_SIZE = 1;
+    private static final int KEEP_ALIVE = 1;
+
+    private static final BlockingQueue<Runnable> sPoolWorkQueue =
+            new LinkedBlockingQueue<Runnable>(128);
+
+    private static final ThreadFactory sThreadFactory = new ThreadFactory() {
+        private final AtomicInteger mCount = new AtomicInteger(1);
+
+        public Thread newThread(Runnable r) {
+            return new Thread(r, "AsyncTask #" + mCount.getAndIncrement());
+        }
+    };
+
+    private static final Executor THREAD_POOL_EXECUTOR
+            = new ThreadPoolExecutor(CORE_POOL_SIZE, MAXIMUM_POOL_SIZE, KEEP_ALIVE,
+            TimeUnit.SECONDS, sPoolWorkQueue, sThreadFactory);
+
+    private static class SerialExecutor implements Executor {
+        final ArrayDeque<Runnable> mTasks = new ArrayDeque<Runnable>();
+        Runnable mActive;
+
+        public synchronized void execute(final Runnable r) {
+            mTasks.offer(new Runnable() {
+                public void run() {
+                    try {
+                        r.run();
+                    } finally {
+                        scheduleNext();
+                    }
+                }
+            });
+            if (mActive == null) {
+                scheduleNext();
+            }
+        }
+
+        protected synchronized void scheduleNext() {
+            if ((mActive = mTasks.poll()) != null) {
+                THREAD_POOL_EXECUTOR.execute(mActive);
+            }
+        }
     }
 }
