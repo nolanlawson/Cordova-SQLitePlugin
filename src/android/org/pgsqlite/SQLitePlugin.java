@@ -21,6 +21,8 @@ import java.io.File;
 import java.lang.IllegalArgumentException;
 import java.lang.Number;
 import java.util.HashMap;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -46,6 +48,8 @@ public class SQLitePlugin extends CordovaPlugin {
      * Multiple database map (static).
      */
     static HashMap<String, SQLiteDatabase> dbmap = new HashMap<String, SQLiteDatabase>();
+
+    static Executor backgroundThread = Executors.newFixedThreadPool(1);
 
     /**
      * Get a SQLiteDatabase reference from the db map (public static accessor).
@@ -80,13 +84,23 @@ public class SQLitePlugin extends CordovaPlugin {
             return false;
         }
 
-        try {
-            return executeAndPossiblyThrow(action, args, cbc);
-        } catch (JSONException e) {
-            // TODO: signal JSON problem to JS
-            Log.e(SQLitePlugin.class.getSimpleName(), "unexpected error", e);
-            return false;
-        }
+        executeInBackground(action, args, cbc);
+
+        return true;
+    }
+
+    private void executeInBackground(final Action action, final JSONArray args, final CallbackContext cbc) {
+        backgroundThread.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    executeAndPossiblyThrow(action, args, cbc);
+                } catch (JSONException e) {
+                    // TODO: signal JSON problem to JS
+                    Log.e(SQLitePlugin.class.getSimpleName(), "unexpected error", e);
+                }
+            }
+        });
     }
 
     private boolean executeAndPossiblyThrow(Action action, JSONArray args, CallbackContext cbc)
@@ -181,11 +195,7 @@ public class SQLitePlugin extends CordovaPlugin {
                     }
                 }
 
-                if (action == Action.backgroundExecuteSqlBatch) {
-                    this.executeSqlBatchInBackground(dbname, queries, jsonparams, queryIDs, cbc);
-                } else {
-                    this.executeSqlBatch(dbname, queries, jsonparams, queryIDs, cbc);
-                }
+                this.executeSqlBatch(dbname, queries, jsonparams, queryIDs, cbc);
                 break;
         }
 
@@ -290,29 +300,6 @@ public class SQLitePlugin extends CordovaPlugin {
      */
     private SQLiteDatabase getDatabase(String dbname) {
         return dbmap.get(dbname);
-    }
-
-    /**
-     * Executes a batch request IN BACKGROUND THREAD and sends the results via sendJavascriptCB().
-     *
-     * @param dbName     The name of the database.
-     * @param queryarr   Array of query strings
-     * @param jsonparams Array of JSON query parameters
-     * @param queryIDs   Array of query ids
-     * @param cbc        Callback context from Cordova API
-     */
-    private void executeSqlBatchInBackground(final String dbName,
-                                             final String[] queryarr, final JSONArray[] jsonparams,
-                                             final String[] queryIDs, final CallbackContext cbc) {
-        final SQLitePlugin myself = this;
-
-        this.cordova.getThreadPool().execute(new Runnable() {
-            public void run() {
-                synchronized (myself) {
-                    myself.executeSqlBatch(dbName, queryarr, jsonparams, queryIDs, cbc);
-                }
-            }
-        });
     }
 
     /**
