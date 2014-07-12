@@ -14,13 +14,21 @@ import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteException;
 import android.database.sqlite.SQLiteStatement;
 
+import android.os.Build;
 import android.util.Base64;
 import android.util.Log;
 
 import java.io.File;
 import java.lang.IllegalArgumentException;
 import java.lang.Number;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -44,6 +52,22 @@ public class SQLitePlugin extends CordovaPlugin {
 
     private static final Pattern DELETE_TABLE_NAME = Pattern.compile("^\\s*DELETE\\s+FROM\\s+(\\S+)",
             Pattern.CASE_INSENSITIVE);
+
+    private static final int NUM_THREADS_LOW_MEM = 1;
+    private static final int NUM_THREADS_HIGH_MEM = 3;
+    private static final int NUM_THREADS = android.os.Build.VERSION.SDK_INT >= 11
+            ? NUM_THREADS_HIGH_MEM
+            : NUM_THREADS_LOW_MEM;
+
+    private static Map<String, Integer> dbsToThreads = new HashMap<String, Integer>();
+    private static Executor[] backgroundThreads = new Executor[NUM_THREADS];
+
+    static {
+        for (int i = 0; i < NUM_THREADS; i++) {
+            backgroundThreads[i] = Executors.newFixedThreadPool(1);
+        }
+    }
+
 
     /**
      * Multiple database map (static).
@@ -84,38 +108,77 @@ public class SQLitePlugin extends CordovaPlugin {
         }
 
         try {
-            return executeAndPossiblyThrow(action, args, cbc);
+            executeInBackground(action, args, cbc);
         } catch (JSONException e) {
             // TODO: signal JSON problem to JS
             Log.e(SQLitePlugin.class.getSimpleName(), "unexpected error", e);
-            return false;
         }
+
+        return true;
     }
 
-    private boolean executeAndPossiblyThrow(Action action, JSONArray args, CallbackContext cbc)
+    private void executeInBackground(final Action action, final JSONArray args, final CallbackContext cbc)
             throws JSONException {
 
-        boolean status = true;
+        final String dbname = getDbName(action, args);
+        if (!dbsToThreads.containsKey(dbname)) {
+            dbsToThreads.put(dbname, dbsToThreads.size());
+        }
+        int pos = dbsToThreads.get(dbname) % NUM_THREADS;
+        Executor backgroundThread = backgroundThreads[pos]; // same thread per db
+        backgroundThread.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    executeAndPossiblyThrow(dbname, action, args, cbc);
+                } catch (JSONException e) {
+                    // TODO: signal JSON problem to JS
+                    Log.e(SQLitePlugin.class.getSimpleName(), "unexpected error", e);
+                }
+            }
+        });
+    }
+
+    private String getDbName(Action action, JSONArray args) throws JSONException {
+
         JSONObject o;
-        String dbname;
 
         switch (action) {
             case open:
                 o = args.getJSONObject(0);
-                dbname = o.getString("name");
+                return o.getString("name");
+            case close:
+                o = args.getJSONObject(0);
+                return o.getString("path");
+            case delete:
+                o = args.getJSONObject(0);
+                return o.getString("path");
+            case executePragmaStatement:
+                return args.getString(0);
+            case executeSqlBatch:
+            case executeBatchTransaction:
+            case backgroundExecuteSqlBatch:
+                JSONObject allargs = args.getJSONObject(0);
+                JSONObject dbargs = allargs.getJSONObject("dbargs");
+                return dbargs.getString("dbname");
+        }
+        return null; // shouldn't happen
+    }
 
+    private boolean executeAndPossiblyThrow(String dbname, Action action, JSONArray args, CallbackContext cbc)
+            throws JSONException {
+
+        boolean status = true;
+        JSONObject o;
+
+        switch (action) {
+            case open:
                 this.openDatabase(dbname, null);
                 break;
             case close:
-                o = args.getJSONObject(0);
-                dbname = o.getString("path");
-
                 this.closeDatabase(dbname);
                 break;
             case delete:
-                o = args.getJSONObject(0);
-                dbname = o.getString("path");
-
                 status = this.deleteDatabase(dbname);
 
                 // deleteDatabase() requires an async callback
@@ -126,7 +189,6 @@ public class SQLitePlugin extends CordovaPlugin {
                 }
                 break;
             case executePragmaStatement:
-                dbname = args.getString(0);
                 String query = args.getString(1);
 
                 JSONArray jparams = (args.length() < 3) ? null : args.getJSONArray(2);
@@ -162,8 +224,6 @@ public class SQLitePlugin extends CordovaPlugin {
                 JSONArray[] jsonparams = null;
 
                 JSONObject allargs = args.getJSONObject(0);
-                JSONObject dbargs = allargs.getJSONObject("dbargs");
-                dbname = dbargs.getString("dbname");
                 JSONArray txargs = allargs.getJSONArray("executes");
 
                 if (txargs.isNull(0)) {
@@ -184,11 +244,7 @@ public class SQLitePlugin extends CordovaPlugin {
                     }
                 }
 
-                if (action == Action.backgroundExecuteSqlBatch) {
-                    this.executeSqlBatchInBackground(dbname, queries, jsonparams, queryIDs, cbc);
-                } else {
-                    this.executeSqlBatch(dbname, queries, jsonparams, queryIDs, cbc);
-                }
+                this.executeSqlBatch(dbname, queries, jsonparams, queryIDs, cbc);
                 break;
         }
 
@@ -293,29 +349,6 @@ public class SQLitePlugin extends CordovaPlugin {
      */
     private SQLiteDatabase getDatabase(String dbname) {
         return dbmap.get(dbname);
-    }
-
-    /**
-     * Executes a batch request IN BACKGROUND THREAD and sends the results via sendJavascriptCB().
-     *
-     * @param dbName     The name of the database.
-     * @param queryarr   Array of query strings
-     * @param jsonparams Array of JSON query parameters
-     * @param queryIDs   Array of query ids
-     * @param cbc        Callback context from Cordova API
-     */
-    private void executeSqlBatchInBackground(final String dbName,
-                                             final String[] queryarr, final JSONArray[] jsonparams,
-                                             final String[] queryIDs, final CallbackContext cbc) {
-        final SQLitePlugin myself = this;
-
-        this.cordova.getThreadPool().execute(new Runnable() {
-            public void run() {
-                synchronized (myself) {
-                    myself.executeSqlBatch(dbName, queryarr, jsonparams, queryIDs, cbc);
-                }
-            }
-        });
     }
 
     /**
