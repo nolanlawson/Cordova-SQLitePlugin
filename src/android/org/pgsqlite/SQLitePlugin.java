@@ -104,7 +104,7 @@ public class SQLitePlugin extends CordovaPlugin {
                 DBRunner r = new DBRunner(dbname);
                 this.rmap.put(dbname, r);
                 this.cordova.getThreadPool().execute(r);
-                // TODO should send an async callback
+                cbc.success();
                 break;
 
             case close:

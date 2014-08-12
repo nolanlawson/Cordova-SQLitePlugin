@@ -114,9 +114,13 @@ License for common Javascript: MIT or Apache
       return
 
     SQLitePlugin::open = (success, error) ->
+      self = @
       unless @dbname of @openDBs
         @openDBs[@dbname] = true
-        cordova.exec success, error, "SQLitePlugin", "open", [ @openargs ]
+        succeedAndReturnDB = () ->
+          success(self)
+          return
+        cordova.exec succeedAndReturnDB, error, "SQLitePlugin", "open", [ @openargs ]
 
       return
 

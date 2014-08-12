@@ -26,6 +26,22 @@
 
       function doTest(isWebSql, suiteName, openDatabase) {
 
+        test(suiteName + ' database.open calls its success callback with the db', function () {
+
+          // asynch test coming up
+          stop(1);
+
+          var doneWithSync = false;
+          var dbName = "Database-Open-callback";
+          var db = openDatabase(dbName, "1.0", "Demo", DEFAULT_SIZE, function (asyncDB) {
+            ok(true, 'expected close success callback to be called after database is closed');
+            ok(db === asyncDB, 'db returned sycnhronously and asynchronously should be the same');
+            ok(doneWithSync, 'callback is truly invoked asynchronously');
+            start();
+          });
+          doneWithSync = true;
+        });
+
         test(suiteName + "US-ASCII String test", function() {
 
           var db = openDatabase("ASCII-String-test.db", "1.0", "Demo", DEFAULT_SIZE);
